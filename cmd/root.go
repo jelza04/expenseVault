@@ -76,4 +76,5 @@ func init() {
 	rootCmd.AddCommand(budgetCmd)
 	rootCmd.AddCommand(tuiAPICmd)
 	rootCmd.AddCommand(askCmd)
+	rootCmd.AddCommand(analyticsCmd)
 }
