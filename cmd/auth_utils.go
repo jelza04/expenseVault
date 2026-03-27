@@ -22,10 +22,13 @@ func getCurrentUserID() (int64, error) {
 	}
 
 	tokenString := string(tokenBytes)
-	jwtSecret := []byte("your-secret-key-change-in-production")
+	secret := []byte("your-secret-key-change-in-production")
+	if appConfig != nil {
+		secret = []byte(appConfig.JWTSecret)
+	}
 	
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
+		return secret, nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("invalid token: %w", err)

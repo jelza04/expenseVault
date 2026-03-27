@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 // Gemini API endpoint for flash model
-const geminiBaseURL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key="
+// Gemini API endpoint for flash model
+const geminiBaseURL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="
 
 // GeminiRequest represents the payload structure for the Gemini API
 type GeminiRequest struct {
@@ -38,7 +40,7 @@ type GeminiResponse struct {
 }
 
 const dbSchemaContext = `
-The SQLite/MySQL database contains two relevant tables for this query:
+The database schema consists of two tables. ALL currency values are in Indian Rupees (₹).
 
 CREATE TABLE users (
 	id INTEGER PRIMARY KEY,
@@ -50,7 +52,7 @@ CREATE TABLE transactions (
 	id INTEGER PRIMARY KEY,
 	user_id INTEGER REFERENCES users(id),
 	type TEXT NOT NULL,          -- 'INCOME' or 'EXPENSE'
-	amount REAL NOT NULL,        -- Example: 15.50
+	amount REAL NOT NULL,        -- Amount in Indian Rupees (₹). 
 	category TEXT NOT NULL,      -- Example: 'Food', 'Transport', 'Entertainment'
 	description TEXT NOT NULL,
 	date TEXT NOT NULL,          -- Format: 'YYYY-MM-DD'
@@ -62,27 +64,31 @@ IMPORTANT RULES:
 1. ONLY return a single standard SQL SELECT statement block starting with "SELECT " and ending with ";".
 2. DO NOT wrap the SQL in markdown blocks (e.g., no `+"```"+`sql or `+"```"+`).
 3. DO NOT include any explanations or extra text.
-4. If you need the current date, use standard SQL date functions, or assume the user's intent matches columns.
-5. Filter by user_id = <USER_ID> to ensure users only query their own data.
+4. Filter by user_id = <USER_ID> to ensure users only query their own data.
+5. If the user asks for "month-wise" or "monthly" grouping:
+   - For SQLite: Use strftime('%Y-%m', date) as month
+   - For MySQL: Use DATE_FORMAT(date, '%Y-%m') as month
+6. Dates are stored as strings in 'YYYY-MM-DD' format.
+7. Treat all currency as Rupees (₹).
 `
 
 // GenerateSQL uses the Gemini API to translate a natural language query into a SQL statement.
-func GenerateSQL(query string, userID int64) (string, error) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
+func GenerateSQL(query string, userID int64, dbFlavor string) (string, error) {
+	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
 	if apiKey == "" {
-		return "", fmt.Errorf("GEMINI_API_KEY environment variable is not set")
+		return "", fmt.Errorf("GEMINI_API_KEY environment variable is not set. Please add it to your .env file")
 	}
 
-	prompt := fmt.Sprintf("%s\n\nUSER QUERY: %s\n\nNote: The user's user_id is %d. Replace <USER_ID> with %d in your query.", dbSchemaContext, query, userID, userID)
+	prompt := fmt.Sprintf("%s\n\nDATABASE TYPE: %s\n\nUSER QUERY: %s\n\nNote: The user's user_id is %d. Replace <USER_ID> with %d in your query.", dbSchemaContext, dbFlavor, query, userID, userID)
 
 	return callGeminiAPI(prompt, apiKey)
 }
 
 // SummarizeData takes the raw JSON result from the database query and formats it into a conversational summary.
 func SummarizeData(query string, data []map[string]interface{}) (string, error) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
+	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
 	if apiKey == "" {
-		return "", fmt.Errorf("GEMINI_API_KEY environment variable is not set")
+		return "", fmt.Errorf("GEMINI_API_KEY environment variable is not set. Please add it to your .env file")
 	}
 
 	dataJSON, err := json.MarshalIndent(data, "", "  ")
@@ -91,7 +97,7 @@ func SummarizeData(query string, data []map[string]interface{}) (string, error) 
 	}
 
 	prompt := fmt.Sprintf(`
-You are an AI assistant for a CLI expense tracker app, specifically answering a user's question about their finances.
+You are an AI assistant for a CLI expense tracker app. You are helping an Indian user manage their finances in Indian Rupees (₹).
 
 USER'S ORIGINAL QUESTION: "%s"
 
@@ -102,7 +108,10 @@ INSTRUCTIONS:
 1. Based *only* on the database results provided, answer the user's question.
 2. Provide a concise, friendly, conversational response.
 3. If the results are empty, tell the user no data was found that matched their query.
-4. Format currency amounts cleanly.
+4. MANDATORY: You MUST use the Rupee symbol (₹) for all currency amounts. 
+   - CORRECT: "Your balance is ₹5,000.00"
+   - INCORRECT: "Your balance is $5,000.00"
+   - NEVER use the dollar sign ($) under any circumstances.
 5. You can use slight terminal markdown (like **bolding** key numbers). Do not be overly verbose.
 `, query, string(dataJSON))
 
@@ -127,36 +136,56 @@ func callGeminiAPI(prompt, apiKey string) (string, error) {
 	}
 
 	url := geminiBaseURL + apiKey
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", fmt.Errorf("failed to connect to Gemini API: %w", err)
+	
+	var lastErr error
+	maxRetries := 3
+	backoff := 2 * time.Second
+
+	for i := 0; i <= maxRetries; i++ {
+		if i > 0 {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+
+		resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
+		if err != nil {
+			lastErr = fmt.Errorf("failed to connect to Gemini API: %w", err)
+			continue
+		}
+
+		bodyBytes, err := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("failed to read API response body: %w", err)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("Gemini API error (status %d): %s", resp.StatusCode, string(bodyBytes))
+			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+				continue // Retry on rate limit or server errors
+			}
+			return "", lastErr // Return immediately on auth or client errors
+		}
+
+		var geminiResp GeminiResponse
+		if err := json.Unmarshal(bodyBytes, &geminiResp); err != nil {
+			return "", fmt.Errorf("failed to decode API response: %w", err)
+		}
+
+		if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+			return "", fmt.Errorf("unexpected empty response from Gemini API")
+		}
+
+		// Clean up any potential markdown code blocks if the LLM hallucinated them
+		response := geminiResp.Candidates[0].Content.Parts[0].Text
+		response = strings.TrimPrefix(response, "```sql\n")
+		response = strings.TrimPrefix(response, "```\n")
+		response = strings.TrimSuffix(response, "\n```")
+		response = strings.TrimSpace(response)
+
+		return response, nil
 	}
-	defer resp.Body.Close()
 
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read API response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Gemini API error (status %d): %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var geminiResp GeminiResponse
-	if err := json.Unmarshal(bodyBytes, &geminiResp); err != nil {
-		return "", fmt.Errorf("failed to decode API response: %w", err)
-	}
-
-	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("unexpected empty response from Gemini API")
-	}
-
-	// Clean up any potential markdown code blocks if the LLM hallucinated them
-	response := geminiResp.Candidates[0].Content.Parts[0].Text
-	response = strings.TrimPrefix(response, "```sql\n")
-	response = strings.TrimPrefix(response, "```\n")
-	response = strings.TrimSuffix(response, "\n```")
-	response = strings.TrimSpace(response)
-
-	return response, nil
+	return "", fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
 }

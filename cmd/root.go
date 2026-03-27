@@ -73,5 +73,7 @@ func init() {
 	rootCmd.AddCommand(demoCmd)
 	rootCmd.AddCommand(signupCmd)
 	rootCmd.AddCommand(loginCmd)
+	rootCmd.AddCommand(budgetCmd)
+	rootCmd.AddCommand(tuiAPICmd)
 	rootCmd.AddCommand(askCmd)
 }

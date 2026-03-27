@@ -18,7 +18,7 @@ import (
 func TestShowZeroValues(t *testing.T) {
 	result := ShowZeroValues()
 	// UNIT 4: Table-driven test — checking multiple expected substrings.
-	expected := []string{"int=0", "float=0.0", `string=""`, "bool=false", "rupees=0.00"}
+	expected := []string{"int=0", "float=0.0", `string=""`, "bool=false", "rupees=₹0.00"}
 	for _, exp := range expected {
 		if !strings.Contains(result, exp) {
 			t.Errorf("ShowZeroValues() = %q, missing %q", result, exp)
@@ -331,7 +331,7 @@ func TestAsValidationError(t *testing.T) {
 // TestValidateAll tests variadic batch validation.
 // UNIT 3: Variadic parameter — txs ...*Transaction.
 func TestValidateAll(t *testing.T) {
-	good := NewTransaction(Expense, 100, CategoryFood, "Lunch", "2026-01-01")
+	good := NewTransaction(1, Expense, 100, CategoryFood, "Lunch", "2026-01-01")
 	bad1 := &Transaction{Type: "invalid", Amount: 100, Description: "x", Date: "2026-01-01"}
 	bad2 := &Transaction{Type: Expense, Amount: -1, Description: "x", Date: "2026-01-01"}
 
@@ -354,7 +354,7 @@ func TestValidateAll(t *testing.T) {
 
 // TestNewTransaction verifies the factory function returns a valid *Transaction.
 func TestNewTransaction(t *testing.T) {
-	tx := NewTransaction(Expense, 500, CategoryFood, "Lunch", "2026-02-26")
+	tx := NewTransaction(1, Expense, 500, CategoryFood, "Lunch", "2026-02-26")
 
 	if tx == nil {
 		t.Fatal("NewTransaction returned nil")
@@ -378,7 +378,7 @@ func TestNewTransaction(t *testing.T) {
 
 // TestCloneTransaction verifies deep copy semantics.
 func TestCloneTransaction(t *testing.T) {
-	original := NewTransaction(Income, 10000, CategorySalary, "Salary", "2026-01-01")
+	original := NewTransaction(1, Income, 10000, CategorySalary, "Salary", "2026-01-01")
 	original.ID = 42
 
 	cloned := CloneTransaction(original)
@@ -442,7 +442,7 @@ func TestIsExpenseIsIncome(t *testing.T) {
 
 // TestPointerReceiverSetAmount tests pointer receiver mutation.
 func TestPointerReceiverSetAmount(t *testing.T) {
-	tx := NewTransaction(Expense, 100, CategoryFood, "Snack", "2026-02-26")
+	tx := NewTransaction(1, Expense, 100, CategoryFood, "Snack", "2026-02-26")
 	tx.SetAmount(200)
 
 	if tx.Amount != 200 {
@@ -452,7 +452,7 @@ func TestPointerReceiverSetAmount(t *testing.T) {
 
 // TestPointerReceiverSetCategory tests pointer receiver mutation.
 func TestPointerReceiverSetCategory(t *testing.T) {
-	tx := NewTransaction(Expense, 100, CategoryOther, "Bus ticket", "2026-02-26")
+	tx := NewTransaction(1, Expense, 100, CategoryOther, "Bus ticket", "2026-02-26")
 	tx.SetCategory(CategoryTravel)
 
 	if tx.Category != CategoryTravel {
@@ -477,7 +477,7 @@ func TestApplyDiscount(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tx := NewTransaction(Expense, tc.amount, CategoryShopping, "Item", "2026-01-01")
+			tx := NewTransaction(1, Expense, tc.amount, CategoryShopping, "Item", "2026-01-01")
 			tx.ApplyDiscount(tc.discount)
 			if tx.Amount != tc.want {
 				t.Errorf("ApplyDiscount(%v): got %s, want %s", tc.discount, tx.Amount, tc.want)
@@ -488,7 +488,7 @@ func TestApplyDiscount(t *testing.T) {
 
 // TestPassByValueVsPointer explicitly demonstrates the difference.
 func TestPassByValueVsPointer(t *testing.T) {
-	original := NewTransaction(Expense, 100, CategoryOther, "Test", "2026-01-01")
+	original := NewTransaction(1, Expense, 100, CategoryOther, "Test", "2026-01-01")
 
 	// Pass by value — original should NOT change
 	_ = ModifyByValue(*original, 9999)
@@ -518,7 +518,7 @@ func TestModifyByValueReturnsModifiedCopy(t *testing.T) {
 
 // TestEditTransactionFields tests the pointer-based bulk edit helper.
 func TestEditTransactionFields(t *testing.T) {
-	tx := NewTransaction(Expense, 100, CategoryFood, "Lunch", "2026-01-01")
+	tx := NewTransaction(1, Expense, 100, CategoryFood, "Lunch", "2026-01-01")
 
 	EditTransactionFields(tx, Income, 5000, CategorySalary, "Monthly pay", "2026-02-01", "first salary")
 
@@ -544,7 +544,7 @@ func TestEditTransactionFields(t *testing.T) {
 
 // TestEditTransactionFieldsPartial only updates non-empty fields.
 func TestEditTransactionFieldsPartial(t *testing.T) {
-	tx := NewTransaction(Expense, 100, CategoryFood, "Lunch", "2026-01-01")
+	tx := NewTransaction(1, Expense, 100, CategoryFood, "Lunch", "2026-01-01")
 	tx.Notes = "original note"
 
 	// only change amount, leave everything else
@@ -948,7 +948,7 @@ func BenchmarkUnmarshalTransactions(b *testing.B) {
 
 // BenchmarkMarshalSingleTransaction benchmarks serialization of one transaction.
 func BenchmarkMarshalSingleTransaction(b *testing.B) {
-	tx := NewTransaction(Expense, 500, CategoryFood, "Benchmark item", "2026-01-01")
+	tx := NewTransaction(1, Expense, 500, CategoryFood, "Benchmark item", "2026-01-01")
 	for i := 0; i < b.N; i++ {
 		_, _ = MarshalTransaction(tx)
 	}
@@ -956,7 +956,7 @@ func BenchmarkMarshalSingleTransaction(b *testing.B) {
 
 // BenchmarkUnmarshalSingleTransaction benchmarks deserialization of one transaction.
 func BenchmarkUnmarshalSingleTransaction(b *testing.B) {
-	tx := NewTransaction(Expense, 500, CategoryFood, "Benchmark item", "2026-01-01")
+	tx := NewTransaction(1, Expense, 500, CategoryFood, "Benchmark item", "2026-01-01")
 	data, _ := MarshalTransaction(tx)
 	for i := 0; i < b.N; i++ {
 		_, _ = UnmarshalTransaction(data)
@@ -966,13 +966,13 @@ func BenchmarkUnmarshalSingleTransaction(b *testing.B) {
 // BenchmarkNewTransaction benchmarks the factory function.
 func BenchmarkNewTransaction(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_ = NewTransaction(Expense, 100, CategoryFood, "Item", "2026-01-01")
+		_ = NewTransaction(1, Expense, 100, CategoryFood, "Item", "2026-01-01")
 	}
 }
 
 // BenchmarkCloneTransaction benchmarks the clone function.
 func BenchmarkCloneTransaction(b *testing.B) {
-	tx := NewTransaction(Expense, 100, CategoryFood, "Item", "2026-01-01")
+	tx := NewTransaction(1, Expense, 100, CategoryFood, "Item", "2026-01-01")
 	for i := 0; i < b.N; i++ {
 		_ = CloneTransaction(tx)
 	}

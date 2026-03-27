@@ -1,51 +1,53 @@
 package api
 
 import (
-	"encoding/json"
+	"log"
 	"net/http"
+	"time"
 
-	"expenseVault/models"
+	"expenseVault/db"
+	"expenseVault/utils"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
-// StartServer starts a simple HTTP server.
-func StartServer(addr string) error {
-	mux := http.NewServeMux()
+// StartServer starts the HTTP server with Chi router and middleware pipeline.
+// UNIT 5: Demonstrates efficient routing and request management.
+func StartServer(addr string, store *db.Store, cfg *utils.Config) error {
+	// Initialize the shared JWT secret from config
+	JwtSecret = []byte(cfg.JWTSecret)
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	r := chi.NewRouter()
+
+	// ── Middleware Pipeline ──────────────────────────────────
+	// Request management: logging, panic recovery, timeouts.
+	r.Use(middleware.Logger)      // Logs every request (method, path, duration)
+	r.Use(middleware.Recoverer)   // Recovers from panics and returns 500
+	r.Use(middleware.Timeout(30 * time.Second)) // Request timeout
+	r.Use(CORSMiddleware)         // Allow cross-origin requests
+
+	// ── Public Routes (no auth required) ────────────────────
+	r.Get("/health", handleHealth)
+
+	r.Post("/api/signup", makeSignupHandler(store))
+	r.Post("/api/login", makeLoginHandler(store))
+
+	// ── Protected Routes (JWT required) ─────────────────────
+	r.Group(func(r chi.Router) {
+		r.Use(JWTAuthMiddleware(store))
+
+		// Transaction CRUD
+		r.Get("/api/transactions", makeListTransactionsHandler(store))
+		r.Post("/api/transactions", makeAddTransactionHandler(store))
+
+		// AI Ask
+		r.Post("/api/ask", makeAskHandler(store, cfg))
+
+		// Sync (existing)
+		r.Post("/api/sync", handleSync)
 	})
 
-	mux.HandleFunc("/sync", handleSync)
-
-	return http.ListenAndServe(addr, mux)
-}
-
-// handleSync handles POST /sync.
-// LAB 4.1: Uses models.MarshalTransactions / UnmarshalTransactions
-//
-//	and pointer-based payload decoding.
-func handleSync(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	// LAB 4: Decode into pointer — avoids copy of large payload.
-	payload := &models.SyncPayload{}
-	if err := json.NewDecoder(r.Body).Decode(payload); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-
-	// LAB 4.1: Re-marshal received transactions to validate round-trip.
-	_, marshalErr := models.MarshalTransactions(payload.Transactions)
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":     "ok",
-		"received":   len(payload.Transactions),
-		"marshal_ok": marshalErr == nil,
-	})
+	log.Printf("Server listening on %s", addr)
+	return http.ListenAndServe(addr, r)
 }

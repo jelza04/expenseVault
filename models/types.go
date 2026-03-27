@@ -16,7 +16,7 @@ type Rupees float64
 // String uses fmt.Sprintf — UNIT 1: fmt package usage.
 // UNIT 4: Value receiver (method set on T).
 func (r Rupees) String() string {
-	return fmt.Sprintf("%.2f", float64(r))
+	return fmt.Sprintf("₹%.2f", float64(r))
 }
 
 // ToFloat64 demonstrates type conversion (not casting).

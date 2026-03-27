@@ -43,6 +43,7 @@ const (
 type Model struct {
 	store        *db.Store
 	config       *utils.Config
+	apiClient    *APIClient // When set, TUI communicates via HTTP API
 	view         View
 	cursor       int
 	transactions []models.Transaction
@@ -178,16 +179,27 @@ func (m Model) loadTransactions() tea.Msg {
 	if m.currentUser == nil {
 		return txsLoadedMsg{[]models.Transaction{}, models.DashboardData{}}
 	}
-	txs, err := m.store.GetAllTransactions(m.currentUser.ID)
+
+	var txs []models.Transaction
+	var err error
+
+	// API mode: fetch transactions via HTTP endpoint
+	if m.apiClient != nil {
+		txs, err = m.apiClient.GetTransactions()
+	} else {
+		txs, err = m.store.GetAllTransactions(m.currentUser.ID)
+	}
 	if err != nil {
 		return errMsg{err}
 	}
 	
-	month := time.Now().Format("2006-01")
-	budgets, err := m.store.GetBudgets(m.currentUser.ID, month)
-	if err != nil {
-		// If budgets fail, we still want to show transactions
-		budgets = make(map[models.Category]models.Rupees)
+	budgets := make(map[models.Category]models.Rupees)
+	if m.store != nil {
+		month := time.Now().Format("2006-01")
+		budgets, err = m.store.GetBudgets(m.currentUser.ID, month)
+		if err != nil {
+			budgets = make(map[models.Category]models.Rupees)
+		}
 	}
 
 	dashData := services.CalculateDashboardData(txs, budgets)
@@ -434,6 +446,17 @@ func (m Model) submitSignup() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// API mode: signup via HTTP endpoint
+	if m.apiClient != nil {
+		client := m.apiClient
+		return m, func() tea.Msg {
+			if err := client.Signup(username, password); err != nil {
+				return errMsg{err}
+			}
+			return signupSuccessMsg{username: username}
+		}
+	}
+
 	store := m.store
 	return m, func() tea.Msg {
 		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -455,6 +478,18 @@ func (m Model) submitLogin() (tea.Model, tea.Cmd) {
 	if username == "" || password == "" {
 		m.authMessage = "Username and password are required"
 		return m, nil
+	}
+
+	// API mode: login via HTTP endpoint
+	if m.apiClient != nil {
+		client := m.apiClient
+		return m, func() tea.Msg {
+			user, err := client.Login(username, password)
+			if err != nil {
+				return errMsg{err}
+			}
+			return userLoggedInMsg{user: user}
+		}
 	}
 
 	store := m.store
@@ -570,6 +605,18 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 		date = time.Now().Format("2006-01-02")
 	}
 
+	// API mode: add transaction via HTTP endpoint
+	if m.apiClient != nil {
+		client := m.apiClient
+		return m, func() tea.Msg {
+			id, err := client.AddTransaction(txType, amount, category, desc, date, notes)
+			if err != nil {
+				return errMsg{err}
+			}
+			return txAddedMsg{id}
+		}
+	}
+
 	cat := models.Category(category)
 	if category == "" {
 		cat = services.NewCategorizer().AutoCategorize(desc)
@@ -623,12 +670,28 @@ func (m Model) updateAsk(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.isAsking = true
 			m.askAnswer = "Thinking... ⏳"
 			
+			// API mode: ask via HTTP endpoint
+			if m.apiClient != nil {
+				client := m.apiClient
+				return m, func() tea.Msg {
+					answer, err := client.Ask(query)
+					if err != nil {
+						return errMsg{err}
+					}
+					return askResponseMsg{answer: answer}
+				}
+			}
+			
 			// Capture variables for the async command
 			store := m.store
 			userID := m.currentUser.ID
 			
 			return m, func() tea.Msg {
-				sqlQuery, err := services.GenerateSQL(query, userID)
+				dbType := "sqlite"
+				if m.config != nil {
+					dbType = m.config.DBType
+				}
+				sqlQuery, err := services.GenerateSQL(query, userID, dbType)
 				if err != nil {
 					return errMsg{fmt.Errorf("LLM Error: %w", err)}
 				}
@@ -1070,9 +1133,20 @@ func (m Model) renderReports() string {
 	return sb.String()
 }
 
-// RunTUI starts the BubbleTea TUI application.
+// RunTUI starts the BubbleTea TUI application (direct DB mode).
 func RunTUI(store *db.Store, config *utils.Config) error {
 	model := NewModel(store, config)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	_, err := p.Run()
+	return err
+}
+
+// RunTUIWithAPI starts the TUI in API mode — all operations go through the HTTP server.
+// This demonstrates the UI interacting with backend endpoints.
+func RunTUIWithAPI(serverURL string) error {
+	client := NewAPIClient(serverURL)
+	model := NewModel(nil, nil)
+	model.apiClient = client
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	_, err := p.Run()
 	return err

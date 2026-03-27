@@ -41,8 +41,11 @@ var loginCmd = &cobra.Command{
 
 		_ = store.UpdateLastLogin(user.ID)
 
-		jwtSecret := []byte("your-secret-key-change-in-production")
-		token, err := api.GenerateToken(username, jwtSecret)
+		secret := []byte("your-secret-key-change-in-production")
+		if appConfig != nil {
+			secret = []byte(appConfig.JWTSecret)
+		}
+		token, err := api.GenerateToken(username, secret)
 		if err != nil {
 			return err
 		}

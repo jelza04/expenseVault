@@ -33,7 +33,7 @@ Example:
 		fmt.Printf("Analyzing your query: %q...\n", query)
 
 		// 2. Translate NL -> SQL via LLM
-		sqlQuery, err := services.GenerateSQL(query, userID)
+		sqlQuery, err := services.GenerateSQL(query, userID, appConfig.DBType)
 		if err != nil {
 			fmt.Printf("Error generating SQL from LLM: %v\n", err)
 			return
